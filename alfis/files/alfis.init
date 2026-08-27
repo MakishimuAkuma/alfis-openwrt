@@ -1,0 +1,231 @@
+#!/bin/sh /etc/rc.common
+
+USE_PROCD=1
+
+START=95
+STOP=10
+
+PROG="/usr/bin/alfis"
+CONFIG="/tmp/alfis.toml"
+WORK_DIR="/var/lib/alfis"
+
+
+toml_escape()
+{
+	local value="$1"
+
+	value="${value//\\/\\\\}"
+	value="${value//\"/\\\"}"
+
+	printf '%s' "$value"
+}
+
+
+toml_bool()
+{
+	case "$1" in
+		1|yes|true|on)
+			printf 'true'
+			;;
+		*)
+			printf 'false'
+			;;
+	esac
+}
+
+
+write_toml_string()
+{
+	local value
+
+	value="$(toml_escape "$1")"
+
+	printf '"%s"' "$value"
+}
+
+
+write_list_item()
+{
+	local value="$1"
+
+	printf '\t'
+	write_toml_string "$value"
+	printf ',\n'
+}
+
+
+write_peer()
+{
+	write_list_item "$1"
+}
+
+
+write_forwarder()
+{
+	write_list_item "$1"
+}
+
+
+write_bootstrap()
+{
+	write_list_item "$1"
+}
+
+
+write_key_file()
+{
+	write_list_item "$1"
+}
+
+
+write_host()
+{
+	write_list_item "$1"
+}
+
+
+generate_config()
+{
+	local tmp
+	local origin
+	local check_blocks
+	local dark_theme
+
+	local listen
+	local public
+	local yggdrasil_only
+
+	local dns_listen
+	local dns_threads
+	local cache_memory_limit_mb
+	local enable_0x20
+
+	local mining_threads
+	local mining_lower
+
+	tmp="${CONFIG}.new"
+
+	config_load alfis
+
+	config_get origin main origin \
+		"0000001D2A77D63477172678502E51DE7F346061FF7EB188A2445ECA3FC0780E"
+
+	config_get check_blocks main check_blocks "8"
+	config_get dark_theme main dark_theme "1"
+
+	config_get listen net listen "[::]:4244"
+	config_get public net public "1"
+	config_get yggdrasil_only net yggdrasil_only "0"
+
+	config_get dns_listen dns listen "127.0.0.3:53"
+	config_get dns_threads dns threads "10"
+	config_get cache_memory_limit_mb dns cache_memory_limit_mb "100"
+	config_get enable_0x20 dns enable_0x20 "1"
+
+	config_get mining_threads mining threads "0"
+	config_get mining_lower mining lower "1"
+
+	umask 022
+
+	{
+		printf '%s\n' '# Automatically generated from /etc/config/alfis'
+		printf '%s\n' '# DO NOT EDIT'
+		printf '\n'
+
+		printf 'origin = '
+		write_toml_string "$origin"
+		printf '\n'
+
+		printf 'key_files = [\n'
+		config_list_foreach main key_file write_key_file
+		printf ']\n'
+
+		printf 'check_blocks = %s\n' "$check_blocks"
+		printf 'dark_theme = %s\n' "$(toml_bool "$dark_theme")"
+
+		printf '\n'
+		printf '[net]\n'
+
+		printf 'peers = [\n'
+		config_list_foreach net peer write_peer
+		printf ']\n'
+
+		printf 'listen = '
+		write_toml_string "$listen"
+		printf '\n'
+
+		printf 'public = %s\n' "$(toml_bool "$public")"
+		printf 'yggdrasil_only = %s\n' "$(toml_bool "$yggdrasil_only")"
+
+		printf '\n'
+		printf '[dns]\n'
+
+		printf 'listen = '
+		write_toml_string "$dns_listen"
+		printf '\n'
+
+		printf 'threads = %s\n' "$dns_threads"
+		printf 'cache_memory_limit_mb = %s\n' "$cache_memory_limit_mb"
+
+		printf 'forwarders = [\n'
+		config_list_foreach dns forwarder write_forwarder
+		printf ']\n'
+
+		printf 'bootstraps = [\n'
+		config_list_foreach dns bootstrap write_bootstrap
+		printf ']\n'
+
+		printf 'enable_0x20 = %s\n' "$(toml_bool "$enable_0x20")"
+
+		if config_get_bool hosts_enabled dns hosts_enabled 0; then
+			printf '\n'
+			printf 'hosts = [\n'
+			config_list_foreach dns host write_host
+			printf ']\n'
+		fi
+
+		printf '\n'
+		printf '[mining]\n'
+
+		printf 'threads = %s\n' "$mining_threads"
+		printf 'lower = %s\n' "$(toml_bool "$mining_lower")"
+
+	} > "$tmp" || {
+		rm -f "$tmp"
+		return 1
+	}
+
+	mv "$tmp" "$CONFIG"
+}
+
+
+start_service()
+{
+	mkdir -p "$WORK_DIR"
+
+	if ! generate_config; then
+		echo "alfis: failed to generate configuration"
+		return 1
+	fi
+
+	procd_open_instance
+
+	procd_set_param command \
+		"$PROG" \
+		-n \
+		-c "$CONFIG" \
+		-w "$WORK_DIR"
+
+	procd_set_param respawn
+
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+
+	procd_close_instance
+}
+
+
+stop_service()
+{
+	rm -f "$CONFIG" "$CONFIG.new"
+}

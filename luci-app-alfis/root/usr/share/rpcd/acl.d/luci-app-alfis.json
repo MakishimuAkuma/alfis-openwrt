@@ -1,0 +1,15 @@
+{
+	"luci-app-alfis": {
+		"description": "Grant access to Alfis configuration",
+		"read": {
+			"uci": [
+				"alfis"
+			]
+		},
+		"write": {
+			"uci": [
+				"alfis"
+			]
+		}
+	}
+}
