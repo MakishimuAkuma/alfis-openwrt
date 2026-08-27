@@ -100,10 +100,19 @@ jobs:
         uses: openwrt/gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ env.OPENWRT_BRANCH }}
+
+          # Package from our local feed
           PACKAGES: alfis
+
           FEEDNAME: action
+
           NO_REFRESH_CHECK: 1
+          NO_SHFMT_CHECK: 1
+
           BUILD_LOG: 1
+
+          # Show complete build commands/errors
+          V: s
 
 
       # ----------------------------------------------------------
@@ -242,10 +251,19 @@ jobs:
         uses: openwrt/gh-action-sdk@main
         env:
           ARCH: x86_64-${{ env.OPENWRT_BRANCH }}
+
+          # Package from our local feed
           PACKAGES: luci-app-alfis
+
           FEEDNAME: action
+
           NO_REFRESH_CHECK: 1
+          NO_SHFMT_CHECK: 1
+
           BUILD_LOG: 1
+
+          # Full build output
+          V: s
 
 
       # ----------------------------------------------------------
@@ -281,30 +299,6 @@ jobs:
           echo "$APK"
 
           echo "source=$APK" >> "$GITHUB_OUTPUT"
-
-
-      # ----------------------------------------------------------
-      # Verify architecture
-      # ----------------------------------------------------------
-
-      - name: Verify LuCI APK architecture
-        shell: bash
-        run: |
-          set -e
-
-          APK="${{ steps.apk.outputs.source }}"
-
-          echo "APK:"
-          echo "$APK"
-
-          echo
-          echo "APK metadata:"
-
-          apk info --list "$APK" 2>/dev/null || true
-
-          echo
-          echo "Filename:"
-          basename "$APK"
 
 
       # ----------------------------------------------------------
