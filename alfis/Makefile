@@ -20,20 +20,22 @@ PKG_BUILD_PARALLEL:=1
 include $(INCLUDE_DIR)/package.mk
 
 # NOTE:
-# This package lives in a custom feed (FEEDNAME=action in the workflow),
-# which the OpenWrt build system mounts at:
-#   package/feeds/action/alfis/Makefile
+# This package lives in a custom feed (FEEDNAME=action in the workflow).
+# gh-action-sdk mounts it via "src-link action /feed/", i.e. a plain
+# filesystem symlink to /feed — NOT a git-cloned feed under
+# $(TOPDIR)/feeds/action like the default feeds. Because of that, make
+# actually runs with /feed/alfis as its working directory (see "Entering
+# directory '/feed/alfis'" in the build log), which sits completely
+# outside $(TOPDIR). ANY relative "../../..." include path is therefore
+# wrong here — it can never reach $(TOPDIR)/feeds/packages, no matter how
+# many "../" segments are used.
 #
-# The "packages" feed (which ships rust-package.mk) is mounted as a
-# SIBLING feed directory:
-#   package/feeds/packages/lang/rust/rust-package.mk
-#
-# So the include path needs an extra "packages/" segment. Using
-# "../../lang/rust/rust-package.mk" (correct only for Makefiles that live
-# *inside* the packages feed itself, e.g. packages/net/foo/Makefile) would
-# resolve to the non-existent package/feeds/lang/rust/rust-package.mk and
-# break the build for every architecture.
-include ../../packages/lang/rust/rust-package.mk
+# The "packages" feed (which ships rust-package.mk) IS fetched the normal
+# way (src-git) and is guaranteed to exist at $(TOPDIR)/feeds/packages
+# after "./scripts/feeds update -a", which the SDK action always runs
+# first. So reference it with an absolute, $(TOPDIR)-based path instead
+# of a relative one.
+include $(TOPDIR)/feeds/packages/lang/rust/rust-package.mk
 
 CARGO_PKG_ARGS += --no-default-features
 
