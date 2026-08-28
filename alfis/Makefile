@@ -18,9 +18,30 @@ PKG_BUILD_DEPENDS:=rust/host
 PKG_BUILD_PARALLEL:=1
 
 include $(INCLUDE_DIR)/package.mk
-include ../../lang/rust/rust-package.mk
+
+# NOTE:
+# This package lives in a custom feed (FEEDNAME=action in the workflow),
+# which the OpenWrt build system mounts at:
+#   package/feeds/action/alfis/Makefile
+#
+# The "packages" feed (which ships rust-package.mk) is mounted as a
+# SIBLING feed directory:
+#   package/feeds/packages/lang/rust/rust-package.mk
+#
+# So the include path needs an extra "packages/" segment. Using
+# "../../lang/rust/rust-package.mk" (correct only for Makefiles that live
+# *inside* the packages feed itself, e.g. packages/net/foo/Makefile) would
+# resolve to the non-existent package/feeds/lang/rust/rust-package.mk and
+# break the build for every architecture.
+include ../../packages/lang/rust/rust-package.mk
 
 CARGO_PKG_ARGS += --no-default-features
+
+# Alfis' Cargo.toml default features are: default = ["gui", "doh"].
+# --no-default-features above drops both. GUI is correctly excluded (not
+# needed on a router and pulls in GTK-ish deps), but this also silently
+# drops DNS-over-HTTPS support. Uncomment the next line to keep DoH:
+# CARGO_PKG_ARGS += --features doh
 
 
 define Package/alfis
