@@ -1,3 +1,4 @@
+```yaml
 name: Build Alfis OpenWrt APK
 
 on:
@@ -86,7 +87,6 @@ jobs:
 
           echo
           echo "Package metadata:"
-
           grep -E \
             '^PKG_(NAME|VERSION|RELEASE|SOURCE|SOURCE_URL|SOURCE_SUBDIR|HASH):' \
             alfis/Makefile
@@ -101,18 +101,13 @@ jobs:
         env:
           ARCH: ${{ matrix.arch }}-${{ env.OPENWRT_BRANCH }}
 
-          # Package from our local feed
-          PACKAGES: alfis
-
           FEEDNAME: action
+          PACKAGES: alfis
 
           NO_REFRESH_CHECK: 1
           NO_SHFMT_CHECK: 1
 
           BUILD_LOG: 1
-
-          # Show complete build commands/errors
-          V: s
 
 
       # ----------------------------------------------------------
@@ -144,6 +139,7 @@ jobs:
             exit 1
           fi
 
+          echo
           echo "Found Alfis APK:"
           echo "$APK"
 
@@ -210,19 +206,25 @@ jobs:
 
 
       # ----------------------------------------------------------
-      # Verify package
+      # Verify packages
       # ----------------------------------------------------------
 
-      - name: Verify LuCI package
+      - name: Verify LuCI and Alfis packages
         shell: bash
         run: |
           set -e
 
           echo "========================================"
-          echo "Package:      luci-app-alfis"
-          echo "Architecture: all"
+          echo "Packages:"
+          echo "  - alfis"
+          echo "  - luci-app-alfis"
+          echo "Architecture: x86_64"
           echo "OpenWrt:      ${{ env.OPENWRT_BRANCH }}"
           echo "========================================"
+
+          test -f alfis/Makefile
+          test -f alfis/files/alfis.init
+          test -f alfis/files/alfis.config
 
           test -f luci-app-alfis/Makefile
 
@@ -236,15 +238,20 @@ jobs:
             luci-app-alfis/root/usr/share/luci/menu.d/luci-app-alfis.json
 
           echo
-          echo "Package metadata:"
+          echo "Alfis metadata:"
+          grep -E \
+            '^PKG_(NAME|VERSION|RELEASE|SOURCE|SOURCE_URL|SOURCE_SUBDIR|HASH):' \
+            alfis/Makefile || true
 
+          echo
+          echo "LuCI metadata:"
           grep -E \
             '^(LUCI_TITLE|LUCI_DEPENDS|LUCI_PKGARCH|PKG_LICENSE|PKG_MAINTAINER):' \
-            luci-app-alfis/Makefile
+            luci-app-alfis/Makefile || true
 
 
       # ----------------------------------------------------------
-      # Build
+      # Build LuCI + Alfis
       # ----------------------------------------------------------
 
       - name: Build OpenWrt LuCI package
@@ -252,22 +259,26 @@ jobs:
         env:
           ARCH: x86_64-${{ env.OPENWRT_BRANCH }}
 
-          # Package from our local feed
-          PACKAGES: luci-app-alfis
-
           FEEDNAME: action
+
+          # IMPORTANT:
+          # Build Alfis together with LuCI.
+          #
+          # luci-app-alfis contains:
+          #
+          #   LUCI_DEPENDS:=+alfis
+          #
+          # Therefore Alfis must be available in this SDK build.
+          PACKAGES: alfis luci-app-alfis
 
           NO_REFRESH_CHECK: 1
           NO_SHFMT_CHECK: 1
 
           BUILD_LOG: 1
 
-          # Full build output
-          V: s
-
 
       # ----------------------------------------------------------
-      # Find APK
+      # Find LuCI APK
       # ----------------------------------------------------------
 
       - name: Find LuCI APK
@@ -295,6 +306,7 @@ jobs:
             exit 1
           fi
 
+          echo
           echo "Found LuCI APK:"
           echo "$APK"
 
@@ -302,7 +314,7 @@ jobs:
 
 
       # ----------------------------------------------------------
-      # Upload artifact
+      # Upload LuCI artifact
       # ----------------------------------------------------------
 
       - name: Upload LuCI APK artifact
@@ -464,6 +476,7 @@ jobs:
             exit 1
           fi
 
+          echo
           echo "All expected APKs are present."
 
 
@@ -481,3 +494,4 @@ jobs:
           overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
