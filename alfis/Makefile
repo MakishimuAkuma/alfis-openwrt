@@ -16,22 +16,9 @@ PKG_LICENSE_FILES:=LICENSE
 PKG_BUILD_DEPENDS:=rust/host
 PKG_BUILD_PARALLEL:=1
 
-RUST_PKG_FEATURES:=
-RUST_PKG_LOCKED:=1
-
-RUST_PACKAGE_MK:=$(wildcard $(TOPDIR)/feeds/*/lang/rust/rust-package.mk)
-
-ifeq ($(words $(RUST_PACKAGE_MK)),0)
-  $(error rust-package.mk not found in OpenWrt feeds)
-endif
-
-ifeq ($(words $(RUST_PACKAGE_MK)),1)
-  include $(RUST_PACKAGE_MK)
-else
-  $(error Multiple rust-package.mk files found: $(RUST_PACKAGE_MK))
-endif
-
 include $(INCLUDE_DIR)/package.mk
+
+include $(TOPDIR)/feeds/packages/lang/rust/rust-package.mk
 
 
 define Package/alfis
@@ -51,6 +38,10 @@ endef
 
 define Package/alfis/conffiles
 /etc/config/alfis
+endef
+
+define Build/Compile
+	$(call Build/Compile/Cargo,,--no-default-features)
 endef
 
 
