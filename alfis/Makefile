@@ -14,10 +14,11 @@ PKG_MAINTAINER:=Revertron
 PKG_LICENSE:=AGPL-3.0
 PKG_LICENSE_FILES:=LICENSE
 
-PKG_BUILD_PARALLEL:=1
 PKG_BUILD_DEPENDS:=rust/host
+PKG_BUILD_PARALLEL:=1
 
 include $(INCLUDE_DIR)/package.mk
+include ../../lang/rust/rust-package.mk
 
 
 define Package/alfis
@@ -25,21 +26,13 @@ define Package/alfis
 	CATEGORY:=Network
 	TITLE:=Alternative Free Identity System
 	URL:=https://github.com/Revertron/Alfis
-	DEPENDS:=+libgcc +libpthread +librt
+	DEPENDS:=$(RUST_ARCH_DEPENDS) +libgcc +libpthread +librt
 endef
+
 
 define Package/alfis/description
 	Alternative Free Identity System.
 	Decentralized blockchain-based DNS and peer-to-peer network.
-endef
-
-
-define Build/Compile
-	+$(STAGING_DIR_HOST)/bin/cargo build \
-		--release \
-		--no-default-features \
-		--locked \
-		--target $(RUSTC_TARGET_ARCH)
 endef
 
 
@@ -48,10 +41,15 @@ define Package/alfis/conffiles
 endef
 
 
+define Build/Compile
+	$(call Build/Compile/Cargo,,--no-default-features)
+endef
+
+
 define Package/alfis/install
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) \
-		$(PKG_BUILD_DIR)/target/$(RUSTC_TARGET_ARCH)/release/alfis \
+		$(PKG_INSTALL_DIR)/bin/alfis \
 		$(1)/usr/bin/alfis
 
 	$(INSTALL_DIR) $(1)/etc/config
@@ -68,4 +66,5 @@ define Package/alfis/install
 endef
 
 
+$(eval $(call RustBinPackage,alfis))
 $(eval $(call BuildPackage,alfis))
