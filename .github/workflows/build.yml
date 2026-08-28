@@ -22,24 +22,23 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
-            clang \
-            flex \
-            bison \
-            gawk \
-            gettext \
-            git \
-            libncurses-dev \
-            libssl-dev \
-            python3 \
-            python3-distutils \
-            python3-setuptools \
-            rsync \
-            unzip \
-            zlib1g-dev \
-            file \
-            wget \
-            curl
+          build-essential \
+          clang \
+          flex \
+          bison \
+          gawk \
+          gcc-multilib \
+          g++-multilib \
+          gettext \
+          git \
+          libncurses-dev \
+          libssl-dev \
+          python3 \
+          python3-setuptools \
+          rsync \
+          unzip \
+          wget \
+          zlib1g-dev
 
       - name: Clone OpenWrt 25.12
         run: |
