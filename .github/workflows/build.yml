@@ -1,495 +1,153 @@
-name: Build Alfis OpenWrt APK
+name: Build Alfis
 
 on:
-  release:
-    types:
-      - published
-
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: "Existing GitHub Release tag"
-        required: true
-        type: string
+  push:
+    branches:
+      - main
+  pull_request:
 
 permissions:
-  contents: write
-
-env:
-  OPENWRT_BRANCH: openwrt-25.12
-
+  contents: read
 
 jobs:
-
-  # ============================================================
-  # BUILD ALFIS
-  # ============================================================
-
-  build-alfis:
-    name: Build Alfis (${{ matrix.arch }})
-    runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-
-      matrix:
-        arch:
-          - arm_cortex-a7
-          - arm_cortex-a9
-          - arm_cortex-a15_neon-vfpv4
-
-          - aarch64_cortex-a53
-          - aarch64_cortex-a72
-          - rockchip-armv8
-          - aarch64_generic
-
-          - i386_pentium4
-          - x86_64
-
-          - mipsel_24kc
-          - mips_mips32
-          - mips64_octeonplus
-
-          - riscv64_generic
+  build:
+    runs-on: ubuntu-24.04
 
     steps:
-
-      # ----------------------------------------------------------
-      # Checkout
-      # ----------------------------------------------------------
-
-      - name: Checkout package feed
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 1
 
-
-      # ----------------------------------------------------------
-      # Verify package
-      # ----------------------------------------------------------
-
-      - name: Verify Alfis package
-        shell: bash
+      - name: Install dependencies
         run: |
-          set -e
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            flex \
+            bison \
+            gawk \
+            gettext \
+            git \
+            libncurses-dev \
+            libssl-dev \
+            python3 \
+            python3-distutils \
+            python3-setuptools \
+            rsync \
+            unzip \
+            zlib1g-dev \
+            file \
+            wget \
+            curl
 
-          echo "========================================"
-          echo "Package:      Alfis"
-          echo "Architecture: ${{ matrix.arch }}"
-          echo "OpenWrt:      ${{ env.OPENWRT_BRANCH }}"
-          echo "========================================"
-
-          test -f alfis/Makefile
-          test -f alfis/files/alfis.init
-          test -f alfis/files/alfis.config
-
-          echo
-          echo "Package metadata:"
-          grep -E \
-            '^PKG_(NAME|VERSION|RELEASE|SOURCE|SOURCE_URL|SOURCE_SUBDIR|HASH):' \
-            alfis/Makefile
-
-
-      # ----------------------------------------------------------
-      # Build
-      # ----------------------------------------------------------
-
-      - name: Build OpenWrt Alfis package
-        uses: openwrt/gh-action-sdk@main
-        env:
-          ARCH: ${{ matrix.arch }}-${{ env.OPENWRT_BRANCH }}
-
-          FEEDNAME: action
-          PACKAGES: alfis
-
-          NO_REFRESH_CHECK: 1
-          NO_SHFMT_CHECK: 1
-
-          BUILD_LOG: 1
-
-
-      # ----------------------------------------------------------
-      # Find APK
-      # ----------------------------------------------------------
-
-      - name: Find Alfis APK
-        id: apk
-        shell: bash
+      - name: Clone OpenWrt 25.12
         run: |
-          set -e
+          git clone --depth=1 \
+            --branch openwrt-25.12 \
+            https://github.com/openwrt/openwrt.git \
+            openwrt
 
-          APK="$(find bin \
-            -type f \
-            -name 'alfis-*.apk' \
-            | head -n 1)"
+      - name: Update OpenWrt feeds
+        working-directory: openwrt
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
 
-          if [ -z "$APK" ]; then
-            echo "ERROR: Alfis APK not found"
+      - name: Add Alfis feed
+        run: |
+          rm -rf openwrt/feeds/alfis
+          mkdir -p openwrt/feeds/alfis
 
-            echo
-            echo "Available APK files:"
-            find bin \
-              -type f \
-              -name '*.apk' \
-              -print \
-              | sort || true
+          cp -a \
+            Makefile \
+            files \
+            openwrt/feeds/alfis/
 
-            exit 1
+          if [ -d luci-app-alfis ]; then
+            cp -a luci-app-alfis openwrt/feeds/alfis/
           fi
 
-          echo
-          echo "Found Alfis APK:"
-          echo "$APK"
-
-          echo "source=$APK" >> "$GITHUB_OUTPUT"
-
-
-      # ----------------------------------------------------------
-      # Rename APK
-      # ----------------------------------------------------------
-
-      - name: Rename Alfis APK
-        id: renamed
-        shell: bash
+      - name: Link Alfis package
+        working-directory: openwrt
         run: |
-          set -e
+          mkdir -p package/alfis
+          cp -a feeds/alfis/Makefile package/alfis/
 
-          SOURCE="${{ steps.apk.outputs.source }}"
+          if [ -d feeds/alfis/files ]; then
+            cp -a feeds/alfis/files package/alfis/
+          fi
 
-          DIR="$(dirname "$SOURCE")"
-          BASE="$(basename "$SOURCE" .apk)"
+      - name: Link LuCI package
+        working-directory: openwrt
+        run: |
+          if [ -d feeds/alfis/luci-app-alfis ]; then
+            rm -rf package/luci-app-alfis
+            cp -a feeds/alfis/luci-app-alfis package/luci-app-alfis
+          fi
 
-          TARGET="${DIR}/${BASE}-${{ matrix.arch }}.apk"
+      - name: Configure target
+        working-directory: openwrt
+        run: |
+          cat > .config <<'EOF'
+          CONFIG_TARGET_mips64=y
+          CONFIG_TARGET_mips64_octeonplus=y
+          CONFIG_TARGET_mips64_octeonplus_DEVICE_generic=y
 
-          mv "$SOURCE" "$TARGET"
+          CONFIG_PACKAGE_alfis=m
+          CONFIG_PACKAGE_luci-app-alfis=m
+          EOF
 
-          echo "Renamed:"
-          echo "$TARGET"
+          make defconfig
 
-          echo "path=$TARGET" >> "$GITHUB_OUTPUT"
+      - name: Show Alfis Makefile
+        working-directory: openwrt
+        run: |
+          echo "===== package/alfis/Makefile ====="
+          cat package/alfis/Makefile
 
+          if [ -f package/luci-app-alfis/Makefile ]; then
+            echo "===== package/luci-app-alfis/Makefile ====="
+            cat package/luci-app-alfis/Makefile
+          fi
 
-      # ----------------------------------------------------------
-      # Upload artifact
-      # ----------------------------------------------------------
+      - name: Prepare Rust host compiler
+        working-directory: openwrt
+        run: |
+          make package/feeds/packages/rust/host/compile -j1 V=s
 
-      - name: Upload Alfis APK artifact
+      - name: Compile Alfis
+        working-directory: openwrt
+        run: |
+          make package/alfis/clean
+          make package/alfis/compile -j1 V=s
+
+      - name: Compile LuCI app
+        working-directory: openwrt
+        run: |
+          if [ -d package/luci-app-alfis ]; then
+            make package/luci-app-alfis/clean
+            make package/luci-app-alfis/compile -j1 V=s
+          fi
+
+      - name: Collect packages
+        working-directory: openwrt
+        run: |
+          mkdir -p ../artifacts
+
+          find bin/packages \
+            -type f \
+            \( -name '*alfis*.apk' -o -name '*alfis*.ipk' \) \
+            -exec cp -v {} ../artifacts/ \;
+
+          find bin/packages \
+            -type f \
+            \( -name '*luci-app-alfis*.apk' -o -name '*luci-app-alfis*.ipk' \) \
+            -exec cp -v {} ../artifacts/ \;
+
+      - name: Upload packages
         uses: actions/upload-artifact@v4
         with:
-          name: alfis-apk-${{ matrix.arch }}
-          path: ${{ steps.renamed.outputs.path }}
+          name: alfis-packages
+          path: artifacts/
           if-no-files-found: error
-          retention-days: 7
-
-
-  # ============================================================
-  # BUILD LUCI
-  # ============================================================
-
-  build-luci:
-    name: Build LuCI
-    runs-on: ubuntu-latest
-
-    steps:
-
-      # ----------------------------------------------------------
-      # Checkout
-      # ----------------------------------------------------------
-
-      - name: Checkout package feed
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 1
-
-
-      # ----------------------------------------------------------
-      # Verify packages
-      # ----------------------------------------------------------
-
-      - name: Verify LuCI and Alfis packages
-        shell: bash
-        run: |
-          set -e
-
-          echo "========================================"
-          echo "Packages:"
-          echo "  - alfis"
-          echo "  - luci-app-alfis"
-          echo "Architecture: x86_64"
-          echo "OpenWrt:      ${{ env.OPENWRT_BRANCH }}"
-          echo "========================================"
-
-          test -f alfis/Makefile
-          test -f alfis/files/alfis.init
-          test -f alfis/files/alfis.config
-
-          test -f luci-app-alfis/Makefile
-
-          test -f \
-            luci-app-alfis/htdocs/luci-static/resources/view/alfis/alfis.js
-
-          test -f \
-            luci-app-alfis/root/usr/share/rpcd/acl.d/luci-app-alfis.json
-
-          test -f \
-            luci-app-alfis/root/usr/share/luci/menu.d/luci-app-alfis.json
-
-          echo
-          echo "Alfis metadata:"
-          grep -E \
-            '^PKG_(NAME|VERSION|RELEASE|SOURCE|SOURCE_URL|SOURCE_SUBDIR|HASH):' \
-            alfis/Makefile || true
-
-          echo
-          echo "LuCI metadata:"
-          grep -E \
-            '^(LUCI_TITLE|LUCI_DEPENDS|LUCI_PKGARCH|PKG_LICENSE|PKG_MAINTAINER):' \
-            luci-app-alfis/Makefile || true
-
-
-      # ----------------------------------------------------------
-      # Build LuCI + Alfis
-      # ----------------------------------------------------------
-
-      - name: Build OpenWrt LuCI package
-        uses: openwrt/gh-action-sdk@main
-        env:
-          ARCH: x86_64-${{ env.OPENWRT_BRANCH }}
-
-          FEEDNAME: action
-
-          # IMPORTANT:
-          # Build Alfis together with LuCI.
-          #
-          # luci-app-alfis contains:
-          #
-          #   LUCI_DEPENDS:=+alfis
-          #
-          # Therefore Alfis must be available in this SDK build.
-          PACKAGES: alfis luci-app-alfis
-
-          NO_REFRESH_CHECK: 1
-          NO_SHFMT_CHECK: 1
-
-          BUILD_LOG: 1
-
-
-      # ----------------------------------------------------------
-      # Find LuCI APK
-      # ----------------------------------------------------------
-
-      - name: Find LuCI APK
-        id: apk
-        shell: bash
-        run: |
-          set -e
-
-          APK="$(find bin \
-            -type f \
-            -name 'luci-app-alfis-*.apk' \
-            | head -n 1)"
-
-          if [ -z "$APK" ]; then
-            echo "ERROR: LuCI APK not found"
-
-            echo
-            echo "Available APK files:"
-            find bin \
-              -type f \
-              -name '*.apk' \
-              -print \
-              | sort || true
-
-            exit 1
-          fi
-
-          echo
-          echo "Found LuCI APK:"
-          echo "$APK"
-
-          echo "source=$APK" >> "$GITHUB_OUTPUT"
-
-
-      # ----------------------------------------------------------
-      # Upload LuCI artifact
-      # ----------------------------------------------------------
-
-      - name: Upload LuCI APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: luci-app-alfis-apk
-          path: ${{ steps.apk.outputs.source }}
-          if-no-files-found: error
-          retention-days: 7
-
-
-  # ============================================================
-  # RELEASE
-  # ============================================================
-
-  release:
-    name: Publish APKs to GitHub Release
-
-    needs:
-      - build-alfis
-      - build-luci
-
-    if: |
-      needs.build-alfis.result == 'success' &&
-      needs.build-luci.result == 'success'
-
-    runs-on: ubuntu-latest
-
-    steps:
-
-      # ----------------------------------------------------------
-      # Determine Release tag
-      # ----------------------------------------------------------
-
-      - name: Determine release tag
-        id: release_tag
-        shell: bash
-        env:
-          EVENT_TAG: ${{ github.event.release.tag_name }}
-          MANUAL_TAG: ${{ inputs.release_tag }}
-        run: |
-          set -e
-
-          if [ -n "$EVENT_TAG" ]; then
-            TAG="$EVENT_TAG"
-          else
-            TAG="$MANUAL_TAG"
-          fi
-
-          if [ -z "$TAG" ]; then
-            echo "ERROR: Release tag is empty"
-            exit 1
-          fi
-
-          echo "Using Release:"
-          echo "$TAG"
-
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-
-      # ----------------------------------------------------------
-      # Download Alfis artifacts
-      # ----------------------------------------------------------
-
-      - name: Download Alfis APK artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: alfis-apk-*
-          path: release
-          merge-multiple: true
-
-
-      # ----------------------------------------------------------
-      # Download LuCI artifact
-      # ----------------------------------------------------------
-
-      - name: Download LuCI APK artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: luci-app-alfis-apk
-          path: release
-
-
-      # ----------------------------------------------------------
-      # List APKs
-      # ----------------------------------------------------------
-
-      - name: List APKs
-        shell: bash
-        run: |
-          set -e
-
-          echo "========================================"
-          echo "APKs to upload"
-          echo "========================================"
-
-          find release \
-            -type f \
-            -name '*.apk' \
-            -print \
-            | sort
-
-          COUNT="$(find release -type f -name '*.apk' | wc -l)"
-
-          echo
-          echo "Found $COUNT APK(s)"
-
-          if [ "$COUNT" -ne 14 ]; then
-            echo
-            echo "ERROR: Expected 14 APKs"
-            echo "       13 Alfis + 1 LuCI"
-
-            exit 1
-          fi
-
-
-      # ----------------------------------------------------------
-      # Verify expected packages
-      # ----------------------------------------------------------
-
-      - name: Verify APK set
-        shell: bash
-        run: |
-          set -e
-
-          EXPECTED_ARCHS="
-          arm_cortex-a7
-          arm_cortex-a9
-          arm_cortex-a15_neon-vfpv4
-          aarch64_cortex-a53
-          aarch64_cortex-a72
-          rockchip-armv8
-          aarch64_generic
-          i386_pentium4
-          x86_64
-          mipsel_24kc
-          mips_mips32
-          mips64_octeonplus
-          riscv64_generic
-          "
-
-          for ARCH in $EXPECTED_ARCHS; do
-            if ! find release \
-              -type f \
-              -name "alfis-*-${ARCH}.apk" \
-              | grep -q .; then
-
-              echo "ERROR: Missing Alfis APK for ${ARCH}"
-              exit 1
-            fi
-          done
-
-          if ! find release \
-            -type f \
-            -name 'luci-app-alfis-*.apk' \
-            | grep -q .; then
-
-            echo "ERROR: Missing luci-app-alfis APK"
-            exit 1
-          fi
-
-          echo
-          echo "All expected APKs are present."
-
-
-      # ----------------------------------------------------------
-      # Upload APKs to Release
-      # ----------------------------------------------------------
-
-      - name: Upload APKs to Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ steps.release_tag.outputs.tag }}
-          files: |
-            release/*.apk
-          fail_on_unmatched_files: true
-          overwrite_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
