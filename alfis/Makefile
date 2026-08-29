@@ -51,7 +51,13 @@ define Package/alfis
 	CATEGORY:=Network
 	TITLE:=Alternative Free Identity System
 	URL:=https://github.com/Revertron/Alfis
-	DEPENDS:=$(RUST_ARCH_DEPENDS) +libgcc +libpthread +librt
+	# +libsqlite3 is required: Alfis depends on the "sqlite" crate, whose
+	# default feature ("linkage") dynamically links against the system
+	# libsqlite3 via pkg-config instead of building it from source.
+	# Without this dependency, sqlite3.h / libsqlite3.so are never staged
+	# for the target arch and the cross-compile link step fails on every
+	# architecture with the same generic "failed to build" error.
+	DEPENDS:=$(RUST_ARCH_DEPENDS) +libgcc +libpthread +librt +libsqlite3
 endef
 
 
