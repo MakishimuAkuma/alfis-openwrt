@@ -8,6 +8,16 @@ PKG_SOURCE:=v$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://github.com/Revertron/Alfis/archive/refs/tags/
 PKG_SOURCE_SUBDIR:=Alfis-$(PKG_VERSION)
 
+# The tarball extracts into "Alfis-<version>" (capital A), but the default
+# PKG_BUILD_DIR is "$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)" i.e.
+# "alfis-<version>" (lowercase, from PKG_NAME). On a case-sensitive
+# filesystem those are two different directories: the source lands in
+# "Alfis-<version>" while every later build step (including "cargo
+# install --path ...") looks in "alfis-<version>", finds it empty, and
+# fails with "does not contain a Cargo.toml file". Point PKG_BUILD_DIR at
+# the real extracted directory name to fix this.
+PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_SOURCE_SUBDIR)
+
 PKG_HASH:=65920e382486b9e52d8bce989cb5c6b4381c817c753fbfd5fdf652ef0ba3ee92
 
 PKG_MAINTAINER:=Revertron
