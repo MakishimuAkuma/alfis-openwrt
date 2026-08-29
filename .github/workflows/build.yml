@@ -117,6 +117,25 @@ jobs:
 
           BUILD_LOG: 1
 
+          # Verbose compiler/linker output (V=s) so the actual rustc/cargo
+          # error shows up directly in the step log instead of being
+          # swallowed by the generic "failed to build" summary.
+          V: s
+
+
+      # ----------------------------------------------------------
+      # Upload full build log (always, even on failure)
+      # ----------------------------------------------------------
+
+      - name: Upload Alfis build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alfis-build-log-${{ matrix.arch }}
+          path: logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
 
       # ----------------------------------------------------------
       # Find APK
@@ -283,6 +302,22 @@ jobs:
           NO_SHFMT_CHECK: 1
 
           BUILD_LOG: 1
+
+          V: s
+
+
+      # ----------------------------------------------------------
+      # Upload full build log (always, even on failure)
+      # ----------------------------------------------------------
+
+      - name: Upload LuCI build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-build-log
+          path: logs/
+          if-no-files-found: ignore
+          retention-days: 7
 
 
       # ----------------------------------------------------------
