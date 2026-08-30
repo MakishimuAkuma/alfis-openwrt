@@ -77,6 +77,19 @@ return view.extend({
         o.datatype = 'string';
 
 
+        o = s.option(
+            form.Value,
+                'work_dir',
+                _('Working directory'),
+                     _('Directory where Alfis stores its blockchain database and key files. Changing this only takes effect after the service is restarted, and the new directory must be writable by the unprivileged "alfis" user the service runs as.')
+        );
+
+        o.datatype = 'string';
+        o.default = '/etc/alfis';
+        o.rmempty = false;
+        o.placeholder = '/etc/alfis';
+
+
         /*
          * Network
          */

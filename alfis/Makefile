@@ -68,6 +68,14 @@ define Package/alfis
 	# for the target arch and the cross-compile link step fails on every
 	# architecture with the same generic "failed to build" error.
 	DEPENDS:=$(RUST_ARCH_DEPENDS) +libgcc +libpthread +librt +libsqlite3
+	# Declares a dedicated, unprivileged system user/group for the
+	# service (uid=gid=555, picked to avoid every USERID already used
+	# across the packages feed). OpenWrt's base-files provides
+	# add_group_and_user(), which reads this "Require-User" metadata and
+	# creates the account automatically on install if it doesn't already
+	# exist — see Package/alfis/postinst below for the explicit call
+	# (belt-and-suspenders: covers apk-based installs too).
+	USERID:=alfis=555:alfis=555
 endef
 
 
@@ -82,6 +90,20 @@ define Package/alfis/conffiles
 endef
 
 
+define Package/alfis/postinst
+#!/bin/sh
+# Explicit call as a safety net alongside the USERID/Require-User
+# metadata above (base-files' default postinst already does this for
+# opkg-based installs; calling it here too guarantees the account
+# exists regardless of package-manager version).
+[ -n "$$IPKG_INSTROOT" ] || {
+	. /lib/functions.sh
+	add_group_and_user "alfis"
+}
+exit 0
+endef
+
+
 define Package/alfis/install
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/bin/alfis $(1)/usr/bin/alfis
@@ -92,7 +114,14 @@ define Package/alfis/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/alfis.init $(1)/etc/init.d/alfis
 
-	$(INSTALL_DIR) $(1)/var/lib/alfis
+	$(INSTALL_DIR) $(1)/usr/share/alfis
+	$(INSTALL_DATA) ./files/alfis-capabilities.json $(1)/usr/share/alfis/capabilities.json
+
+	# NOTE: the working directory (default /etc/alfis, configurable via
+	# UCI "work_dir") is intentionally NOT pre-created here. It's
+	# created (and chown'd to the alfis user) by the init script at
+	# every service start instead, since the path is now runtime-
+	# configurable rather than fixed at build time.
 endef
 
 

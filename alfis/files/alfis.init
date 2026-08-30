@@ -7,7 +7,15 @@ STOP=10
 
 PROG="/usr/bin/alfis"
 CONFIG="/tmp/alfis.toml"
-WORK_DIR="/var/lib/alfis"
+CAPABILITIES="/usr/share/alfis/capabilities.json"
+
+# Default kept in sync with the "option work_dir" default in
+# files/alfis.config. Overridable via UCI ("work_dir" in the "main"
+# section) and now surfaced in the LuCI page too.
+WORK_DIR_DEFAULT="/etc/alfis"
+
+RUN_USER="alfis"
+RUN_GROUP="alfis"
 
 
 toml_escape()
@@ -201,7 +209,19 @@ generate_config()
 
 start_service()
 {
-	mkdir -p "$WORK_DIR"
+	local work_dir
+
+	config_load alfis
+	config_get work_dir main work_dir "$WORK_DIR_DEFAULT"
+
+	mkdir -p "$work_dir"
+
+	# The service used to run as root, so on upgrade the directory (or
+	# its previous /var/lib/alfis location) may still be root-owned.
+	# chown it (and anything already inside it) to the service account
+	# so the now-unprivileged process can actually read/write its
+	# blockchain DB and key files.
+	chown -R "$RUN_USER:$RUN_GROUP" "$work_dir" 2>/dev/null
 
 	if ! generate_config; then
 		echo "alfis: failed to generate configuration"
@@ -214,7 +234,17 @@ start_service()
 		"$PROG" \
 		-n \
 		-c "$CONFIG" \
-		-w "$WORK_DIR"
+		-w "$work_dir"
+
+	# Run unprivileged as the dedicated "alfis" system user/group
+	# (created automatically on install via the package's USERID/
+	# Require-User metadata), and grant only the one Linux capability
+	# actually needed to bind the DNS resolver to a port below 1024
+	# (127.0.0.3:53) without running the whole process as root.
+	procd_set_param user "$RUN_USER"
+	procd_set_param group "$RUN_GROUP"
+	procd_set_param capabilities "$CAPABILITIES"
+	procd_set_param no_new_privs
 
 	procd_set_param respawn
 
