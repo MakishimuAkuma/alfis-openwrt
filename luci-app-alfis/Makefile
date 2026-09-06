@@ -15,7 +15,7 @@ define Package/luci-app-alfis
 	CATEGORY:=LuCI
 	SUBMENU:=3. Applications
 	TITLE:=LuCI support for Alfis
-	DEPENDS:=+alfis +luci-base
+	DEPENDS:=+alfis
 	PKGARCH:=all
 endef
 
