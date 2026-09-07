@@ -256,7 +256,7 @@ jobs:
           test -f luci-app-alfis/Makefile
 
           test -f \
-            luci-app-alfis/htdocs/luci-static/resources/view/alfis/alfis.js
+            luci-app-alfis/root/www/luci-static/resources/view/alfis/alfis.js
 
           test -f \
             luci-app-alfis/root/usr/share/rpcd/acl.d/luci-app-alfis.json
