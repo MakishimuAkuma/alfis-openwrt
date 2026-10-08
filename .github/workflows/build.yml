@@ -85,12 +85,33 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-          if [ "$CURRENT" = "$VERSION" ]; then
-            echo "Alfis is already up to date."
-            echo "build=false" >> "$GITHUB_OUTPUT"
+                    if [ "$CURRENT" = "$VERSION" ]; then
+            echo "Alfis upstream version matches package version: $VERSION"
+
+            RELEASE_API="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}"
+
+            RELEASE_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              ${GITHUB_TOKEN:+-H "Authorization: Bearer ${GITHUB_TOKEN}"} \
+              "$RELEASE_API")"
+
+            if [ "$RELEASE_STATUS" = "200" ]; then
+              echo "GitHub Release $TAG already exists."
+              echo "build=false" >> "$GITHUB_OUTPUT"
+            elif [ "$RELEASE_STATUS" = "404" ]; then
+              echo "GitHub Release $TAG does not exist."
+              echo "Rebuilding Alfis $TAG."
+              echo "build=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "ERROR: Unexpected GitHub Release API status: $RELEASE_STATUS"
+              exit 1
+            fi
+
           elif [ "$(printf '%s\n' "$CURRENT" "$VERSION" | sort -V | tail -n1)" = "$CURRENT" ]; then
             echo "Local package version $CURRENT is newer than upstream stable $VERSION."
             echo "build=false" >> "$GITHUB_OUTPUT"
+
           else
             echo "New Alfis version detected: $CURRENT -> $VERSION"
             echo "build=true" >> "$GITHUB_OUTPUT"
