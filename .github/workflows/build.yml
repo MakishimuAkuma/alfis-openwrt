@@ -1,535 +1,435 @@
 name: Build Alfis OpenWrt APK
 
 on:
-  release:
-    types:
-      - published
-
+  schedule:
+    - cron: "0 */6 * * *"
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: "Existing GitHub Release tag"
-        required: true
-        type: string
 
 permissions:
   contents: write
 
 env:
-  # OpenWrt release branch (used only for display / checkout references).
-  OPENWRT_BRANCH: openwrt-25.12
-
-  # OpenWrt SDK Docker image tag suffix.
-  # IMPORTANT: openwrt/sdk images on Docker Hub are tagged as
-  # "<arch>-<version>" using the plain release VERSION (e.g. "25.12.4"),
-  # NOT the git branch name ("openwrt-25.12"). Using the branch name here
-  # produces a tag that does not exist and "docker pull" fails for every
-  # matrix job. Update this whenever you bump to a new point release.
-  OPENWRT_VERSION: 25.12.4
-
+  OPENWRT_VERSION: 25.12.5
+  FEED_BRANCH: gh-pages
+  FEED_ROOT: 25.12
 
 jobs:
-
-  # ============================================================
-  # BUILD ALFIS
-  # ============================================================
-
-  build-alfis:
-    name: Build Alfis (${{ matrix.arch }})
-    runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-
-      matrix:
-        arch:
-          - arm_cortex-a7
-          - arm_cortex-a9
-          - arm_cortex-a15_neon-vfpv4
-
-          - aarch64_cortex-a53
-          - aarch64_cortex-a72
-          - rockchip-armv8
-          - aarch64_generic
-
-          - i386_pentium4
-          - x86_64
-
-          - mipsel_24kc
-          - mips_mips32
-          - mips64_octeonplus
-
-          - riscv64_generic
+  check:
+    name: Check Alfis stable release
+    runs-on: [self-hosted, Linux, X64]
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      tag: ${{ steps.check.outputs.tag }}
+      version: ${{ steps.check.outputs.version }}
 
     steps:
-
-      # ----------------------------------------------------------
-      # Checkout
-      # ----------------------------------------------------------
-
       - name: Checkout package feed
         uses: actions/checkout@v4
         with:
-          ref: main
           fetch-depth: 1
 
+      - name: Check prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v docker
+          command -v sudo
+          command -v curl
+          command -v jq
+          command -v git
+          command -v openssl
+          docker version
 
-      # ----------------------------------------------------------
-      # Verify package
-      # ----------------------------------------------------------
+      - name: Check latest stable Alfis release
+        id: check
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          API="https://api.github.com/repos/Revertron/Alfis/releases/latest"
+
+          RELEASE_JSON="$(curl -fsSL \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            ${GITHUB_TOKEN:+-H "Authorization: Bearer ${GITHUB_TOKEN}"} \
+            "$API")"
+
+          TAG="$(jq -r '.tag_name' <<<"$RELEASE_JSON")"
+          PRERELEASE="$(jq -r '.prerelease' <<<"$RELEASE_JSON")"
+          DRAFT="$(jq -r '.draft' <<<"$RELEASE_JSON")"
+
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            echo "ERROR: Could not determine latest Alfis release"
+            exit 1
+          fi
+
+          if [ "$PRERELEASE" = "true" ] || [ "$DRAFT" = "true" ]; then
+            echo "ERROR: GitHub returned a prerelease/draft as latest release"
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "ERROR: Unexpected Alfis release tag: $TAG"
+            exit 1
+          fi
+
+          CURRENT="$(sed -n 's/^PKG_VERSION:=//p' alfis/Makefile | head -n1)"
+
+          echo "Latest Alfis release: $TAG"
+          echo "Package version:       $CURRENT"
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          if [ "$CURRENT" = "$VERSION" ]; then
+            echo "Alfis is already up to date."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          elif [ "$(printf '%s\n' "$CURRENT" "$VERSION" | sort -V | tail -n1)" = "$CURRENT" ]; then
+            echo "Local package version $CURRENT is newer than upstream stable $VERSION."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New Alfis version detected: $CURRENT -> $VERSION"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip build when already current
+        if: steps.check.outputs.build == 'false'
+        run: |
+          echo "No new stable Alfis release. Nothing to build."
+
+  discover:
+    name: Discover OpenWrt ${{ env.OPENWRT_VERSION }} architectures
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: [self-hosted, Linux, X64]
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+      count: ${{ steps.discover.outputs.count }}
+
+    steps:
+      - name: Discover supported package architectures
+        id: discover
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/packages"
+
+          CANDIDATES=(
+            arm_cortex-a5_vfpv4
+            arm_cortex-a7_neon-vfpv4
+            arm_cortex-a8_vfpv3
+            arm_cortex-a9
+            arm_cortex-a9_vfpv3-d16
+            arm_cortex-a9_neon
+            arm_cortex-a15_neon-vfpv4
+            aarch64_cortex-a53
+            aarch64_cortex-a72
+            aarch64_cortex-a76
+            aarch64_generic
+            mips_24kc
+            mips_mips32
+            mipsel_24kc
+            mipsel_24kc_24kf
+            mipsel_74kc
+            mipsel_mips32
+            mips64_octeonplus
+            riscv64_generic
+            loongarch64_generic
+            i386_pentium4
+            x86_64
+          )
+
+          ARCHS=()
+
+          for ARCH in "${CANDIDATES[@]}"; do
+            if curl -fsI "$BASE/$ARCH/" >/dev/null 2>&1; then
+              ARCHS+=("$ARCH")
+            else
+              echo "Skipping unavailable OpenWrt package architecture: $ARCH"
+            fi
+          done
+
+          if [ "${#ARCHS[@]}" -eq 0 ]; then
+            echo "ERROR: No OpenWrt architectures found"
+            exit 1
+          fi
+
+          JSON="$(printf '%s\n' "${ARCHS[@]}" | jq -Rsc '{arch: split("\n") | map(select(length > 0))}')"
+
+          echo "OpenWrt architectures:"
+          printf '  %s\n' "${ARCHS[@]}"
+
+          echo "matrix=$JSON" >> "$GITHUB_OUTPUT"
+          echo "count=${#ARCHS[@]}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build Alfis (${{ matrix.arch }})
+    needs:
+      - check
+      - discover
+    if: needs.check.outputs.build == 'true'
+    runs-on: [self-hosted, Linux, X64]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(needs.discover.outputs.matrix).arch }}
+
+    steps:
+      - name: Checkout package feed
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Prepare Alfis source version
+        shell: bash
+        env:
+          ALFIS_TAG: ${{ needs.check.outputs.tag }}
+          ALFIS_VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          sed -i -E "s/^PKG_VERSION:=.*/PKG_VERSION:=${ALFIS_VERSION}/" alfis/Makefile
+          sed -i -E "s#^PKG_SOURCE:=.*#PKG_SOURCE:=v${ALFIS_VERSION}.tar.gz#" alfis/Makefile
+          sed -i -E "s#^PKG_SOURCE_SUBDIR:=.*#PKG_SOURCE_SUBDIR:=Alfis-${ALFIS_VERSION}#" alfis/Makefile
+          sed -i -E "s#^PKG_BUILD_DIR:=.*#PKG_BUILD_DIR:=\$(BUILD_DIR)/\$(PKG_SOURCE_SUBDIR)#" alfis/Makefile
+
+          URL="https://github.com/Revertron/Alfis/archive/refs/tags/${ALFIS_TAG}.tar.gz"
+          TMP="$(mktemp)"
+          trap 'rm -f "$TMP"' EXIT
+
+          echo "Downloading source: $URL"
+          curl -fL --retry 5 --retry-delay 2 -o "$TMP" "$URL"
+
+          HASH="$(sha256sum "$TMP" | awk '{print $1}')"
+          echo "Source SHA256: $HASH"
+
+          sed -i -E "s/^PKG_HASH:=.*/PKG_HASH:=${HASH}/" alfis/Makefile
+
+          echo
+          grep -E '^PKG_(NAME|VERSION|RELEASE|SOURCE|SOURCE_URL|SOURCE_SUBDIR|BUILD_DIR|HASH):' alfis/Makefile
+
+      - name: Set build parallelism
+        shell: bash
+        run: |
+          set -euo pipefail
+          CPUS="$(nproc)"
+          echo "Runner CPUs: ${CPUS}"
+          echo "MAKEFLAGS=-j${CPUS}" >> "$GITHUB_ENV"
+          echo "CONFIG_BUILD_NCPUS=${CPUS}" >> "$GITHUB_ENV"
 
       - name: Verify Alfis package
         shell: bash
         run: |
-          set -e
-
-          echo "========================================"
-          echo "Package:      Alfis"
-          echo "Architecture: ${{ matrix.arch }}"
-          echo "OpenWrt:      ${{ env.OPENWRT_BRANCH }} (SDK ${{ env.OPENWRT_VERSION }})"
-          echo "========================================"
-
+          set -euo pipefail
           test -f alfis/Makefile
           test -f alfis/files/alfis.init
           test -f alfis/files/alfis.config
-
-          echo
-          echo "Package metadata:"
-          grep -E \
-            '^PKG_(NAME|VERSION|RELEASE|SOURCE|SOURCE_URL|SOURCE_SUBDIR|HASH):' \
-            alfis/Makefile
-
-
-      # ----------------------------------------------------------
-      # Build
-      # ----------------------------------------------------------
+          test -f alfis/root/www/luci-static/resources/view/alfis/alfis.js
+          echo "Building Alfis ${{ needs.check.outputs.version }} for ${{ matrix.arch }}"
 
       - name: Build OpenWrt Alfis package
         uses: openwrt/gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ env.OPENWRT_VERSION }}
-
           FEEDNAME: action
           PACKAGES: alfis
-
+          INDEX: 1
+          PRIVATE_KEY: ${{ secrets.APK_SIGNING_KEY }}
           NO_REFRESH_CHECK: 1
           NO_SHFMT_CHECK: 1
-
           BUILD_LOG: 1
-
-          # Verbose compiler/linker output (V=s) so the actual rustc/cargo
-          # error shows up directly in the step log instead of being
-          # swallowed by the generic "failed to build" summary.
           V: s
 
-
-      # ----------------------------------------------------------
-      # Upload full build log (always, even on failure)
-      # ----------------------------------------------------------
-
-      - name: Upload Alfis build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: alfis-build-log-${{ matrix.arch }}
-          path: logs/
-          if-no-files-found: ignore
-          retention-days: 7
-
-
-      # ----------------------------------------------------------
-      # Find APK
-      # ----------------------------------------------------------
-
-      - name: Find Alfis APK
-        id: apk
+      - name: Collect Alfis artifacts
+        if: success()
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          APK="$(find bin \
-            -type f \
-            -name 'alfis-*.apk' \
-            | head -n 1)"
+          mkdir -p artifacts/release "artifacts/feed/${{ matrix.arch }}"
 
+          APK="$(find bin -type f -name 'alfis-*.apk' | head -n1)"
           if [ -z "$APK" ]; then
             echo "ERROR: Alfis APK not found"
-
-            echo
-            echo "Available APK files:"
-            find bin \
-              -type f \
-              -name '*.apk' \
-              -print \
-              | sort || true
-
+            find bin -type f -name '*.apk' -print || true
             exit 1
           fi
 
-          echo
-          echo "Found Alfis APK:"
-          echo "$APK"
+          cp "$APK" "artifacts/release/alfis-${{ matrix.arch }}.apk"
 
-          echo "source=$APK" >> "$GITHUB_OUTPUT"
+          FEED="$(find . -type f -name packages.adb | head -n1)"
+          PUB="$(find . -type f -name '*.pub.pem' | head -n1 || true)"
 
+          if [ -z "$FEED" ]; then
+            echo "ERROR: packages.adb not found"
+            exit 1
+          fi
 
-      # ----------------------------------------------------------
-      # Rename APK
-      # ----------------------------------------------------------
+          if [ -z "$PUB" ]; then
+            echo "ERROR: public APK feed key (*.pub.pem) not found"
+            exit 1
+          fi
 
-      - name: Rename Alfis APK
-        id: renamed
-        shell: bash
-        run: |
-          set -e
+          cp "$FEED" "artifacts/feed/${{ matrix.arch }}/packages.adb"
+          cp "$PUB" "artifacts/feed/${{ matrix.arch }}/alfis-feed.pub.pem"
 
-          SOURCE="${{ steps.apk.outputs.source }}"
+          echo "Artifacts for ${{ matrix.arch }}:"
+          find "artifacts/feed/${{ matrix.arch }}" -type f -print
+          find artifacts/release -type f -print
 
-          DIR="$(dirname "$SOURCE")"
-          BASE="$(basename "$SOURCE" .apk)"
-
-          TARGET="${DIR}/${BASE}-${{ matrix.arch }}.apk"
-
-          mv "$SOURCE" "$TARGET"
-
-          echo "Renamed:"
-          echo "$TARGET"
-
-          echo "path=$TARGET" >> "$GITHUB_OUTPUT"
-
-
-      # ----------------------------------------------------------
-      # Upload artifact
-      # ----------------------------------------------------------
-
-      - name: Upload Alfis APK artifact
+      - name: Upload Alfis artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: alfis-apk-${{ matrix.arch }}
-          path: ${{ steps.renamed.outputs.path }}
+          name: alfis-${{ matrix.arch }}
+          path: artifacts/
           if-no-files-found: error
           retention-days: 7
 
-
-  # ============================================================
-  # BUILD LUCI
-  # ============================================================
-
-  build-luci:
-    name: Build LuCI
-    runs-on: ubuntu-latest
-
-    steps:
-
-      # ----------------------------------------------------------
-      # Checkout
-      # ----------------------------------------------------------
-
-      - name: Checkout package feed
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 1
-
-
-      # ----------------------------------------------------------
-      # Verify packages
-      # ----------------------------------------------------------
-
-      - name: Verify LuCI and Alfis packages
-        shell: bash
-        run: |
-          set -e
-
-          echo "========================================"
-          echo "Packages:"
-          echo "  - alfis"
-          echo "  - luci-app-alfis"
-          echo "Architecture: x86_64"
-          echo "OpenWrt:      ${{ env.OPENWRT_BRANCH }} (SDK ${{ env.OPENWRT_VERSION }})"
-          echo "========================================"
-
-          test -f alfis/Makefile
-          test -f alfis/files/alfis.init
-          test -f alfis/files/alfis.config
-
-          test -f luci-app-alfis/Makefile
-
-          test -f \
-            luci-app-alfis/root/www/luci-static/resources/view/alfis/alfis.js
-
-          test -f \
-            luci-app-alfis/root/usr/share/rpcd/acl.d/luci-app-alfis.json
-
-          test -f \
-            luci-app-alfis/root/usr/share/luci/menu.d/luci-app-alfis.json
-
-          echo
-          echo "Alfis metadata:"
-          grep -E \
-            '^PKG_(NAME|VERSION|RELEASE|SOURCE|SOURCE_URL|SOURCE_SUBDIR|HASH):' \
-            alfis/Makefile || true
-
-          echo
-          echo "LuCI metadata:"
-          grep -E \
-            '^(LUCI_TITLE|LUCI_DEPENDS|LUCI_PKGARCH|PKG_LICENSE|PKG_MAINTAINER):' \
-            luci-app-alfis/Makefile || true
-
-
-      # ----------------------------------------------------------
-      # Build LuCI + Alfis
-      # ----------------------------------------------------------
-
-      - name: Build OpenWrt LuCI package
-        uses: openwrt/gh-action-sdk@main
-        env:
-          ARCH: x86_64-${{ env.OPENWRT_VERSION }}
-
-          FEEDNAME: action
-
-          # IMPORTANT:
-          # Build Alfis together with LuCI.
-          #
-          # luci-app-alfis contains:
-          #
-          #   LUCI_DEPENDS:=+alfis
-          #
-          # Therefore Alfis must be available in this SDK build.
-          PACKAGES: alfis luci-app-alfis
-
-          NO_REFRESH_CHECK: 1
-          NO_SHFMT_CHECK: 1
-
-          BUILD_LOG: 1
-
-          V: s
-
-
-      # ----------------------------------------------------------
-      # Upload full build log (always, even on failure)
-      # ----------------------------------------------------------
-
-      - name: Upload LuCI build log
+      - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: luci-build-log
+          name: build-log-alfis-${{ matrix.arch }}
           path: logs/
           if-no-files-found: ignore
           retention-days: 7
 
-
-      # ----------------------------------------------------------
-      # Find LuCI APK
-      # ----------------------------------------------------------
-
-      - name: Find LuCI APK
-        id: apk
-        shell: bash
-        run: |
-          set -e
-
-          APK="$(find bin \
-            -type f \
-            -name 'luci-app-alfis-*.apk' \
-            | head -n 1)"
-
-          if [ -z "$APK" ]; then
-            echo "ERROR: LuCI APK not found"
-
-            echo
-            echo "Available APK files:"
-            find bin \
-              -type f \
-              -name '*.apk' \
-              -print \
-              | sort || true
-
-            exit 1
-          fi
-
-          echo
-          echo "Found LuCI APK:"
-          echo "$APK"
-
-          echo "source=$APK" >> "$GITHUB_OUTPUT"
-
-
-      # ----------------------------------------------------------
-      # Upload LuCI artifact
-      # ----------------------------------------------------------
-
-      - name: Upload LuCI APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: luci-app-alfis-apk
-          path: ${{ steps.apk.outputs.source }}
-          if-no-files-found: error
-          retention-days: 7
-
-
-  # ============================================================
-  # RELEASE
-  # ============================================================
-
   release:
-    name: Publish APKs to GitHub Release
-
+    name: Publish Alfis release and feed
     needs:
-      - build-alfis
-      - build-luci
-
-    runs-on: ubuntu-latest
+      - check
+      - discover
+      - build
+    if: needs.check.outputs.build == 'true'
+    runs-on: [self-hosted, Linux, X64]
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      # ----------------------------------------------------------
-      # Determine Release tag
-      # ----------------------------------------------------------
-
-      - name: Determine release tag
-        id: release_tag
-        shell: bash
-        env:
-          EVENT_TAG: ${{ github.event.release.tag_name }}
-          MANUAL_TAG: ${{ inputs.release_tag }}
-        run: |
-          set -e
-
-          if [ -n "$EVENT_TAG" ]; then
-            TAG="$EVENT_TAG"
-          else
-            TAG="$MANUAL_TAG"
-          fi
-
-          if [ -z "$TAG" ]; then
-            echo "ERROR: Release tag is empty"
-            exit 1
-          fi
-
-          echo "Using Release:"
-          echo "$TAG"
-
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-
-      # ----------------------------------------------------------
-      # Download Alfis artifacts
-      # ----------------------------------------------------------
-
-      - name: Download Alfis APK artifacts
+      - name: Download Alfis artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: alfis-apk-*
-          path: release
+          pattern: alfis-*
+          path: artifacts
           merge-multiple: true
 
-
-      # ----------------------------------------------------------
-      # Download LuCI artifact
-      # ----------------------------------------------------------
-
-      - name: Download LuCI APK artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: luci-app-alfis-apk
-          path: release
-
-
-      # ----------------------------------------------------------
-      # List APKs
-      # ----------------------------------------------------------
-
-      - name: List APKs
+      - name: Verify artifacts
         shell: bash
+        env:
+          EXPECTED: ${{ needs.discover.outputs.count }}
         run: |
-          set -e
+          set -euo pipefail
 
-          echo "========================================"
-          echo "APKs to upload"
-          echo "========================================"
+          APK_COUNT="$(find artifacts/release -type f -name '*.apk' | wc -l)"
+          FEED_COUNT="$(find artifacts -type f -name packages.adb | wc -l)"
 
-          find release \
-            -type f \
-            -name '*.apk' \
-            -print \
-            | sort
+          echo "Expected architectures: $EXPECTED"
+          echo "APK count:              $APK_COUNT"
+          echo "Feed count:             $FEED_COUNT"
 
-          COUNT="$(find release -type f -name '*.apk' | wc -l)"
-
-          echo
-          echo "Found $COUNT APK(s)"
-
-          if [ "$COUNT" -ne 14 ]; then
-            echo
-            echo "ERROR: Expected 14 APKs"
-            echo "       13 Alfis + 1 LuCI"
-
+          if [ "$APK_COUNT" -ne "$EXPECTED" ]; then
+            echo "ERROR: Expected $EXPECTED Alfis APKs, found $APK_COUNT"
             exit 1
           fi
 
+          if [ "$FEED_COUNT" -ne "$EXPECTED" ]; then
+            echo "ERROR: Expected $EXPECTED packages.adb files, found $FEED_COUNT"
+            exit 1
+          fi
 
-      # ----------------------------------------------------------
-      # Verify expected packages
-      # ----------------------------------------------------------
+          PUB="$(find artifacts/feed -type f -name 'alfis-feed.pub.pem' | head -n1)"
+          if [ -z "$PUB" ]; then
+            echo "ERROR: No public APK feed key found"
+            exit 1
+          fi
+          mkdir -p artifacts/release
+          cp "$PUB" artifacts/release/alfis-feed.pub.pem
 
-      - name: Verify APK set
+          find artifacts -type f -name '*.apk' -print | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.check.outputs.tag }}
+          name: Alfis ${{ needs.check.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            artifacts/release/*.apk
+            artifacts/release/alfis-feed.pub.pem
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Publish OpenWrt APK feed
         shell: bash
+        env:
+          TAG: ${{ needs.check.outputs.tag }}
+          ARCH_JSON: ${{ needs.discover.outputs.matrix }}
         run: |
-          set -e
+          set -euo pipefail
 
-          EXPECTED_ARCHS="
-          arm_cortex-a7
-          arm_cortex-a9
-          arm_cortex-a15_neon-vfpv4
-          aarch64_cortex-a53
-          aarch64_cortex-a72
-          rockchip-armv8
-          aarch64_generic
-          i386_pentium4
-          x86_64
-          mipsel_24kc
-          mips_mips32
-          mips64_octeonplus
-          riscv64_generic
-          "
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          for ARCH in $EXPECTED_ARCHS; do
-            if ! find release \
-              -type f \
-              -name "alfis-*-${ARCH}.apk" \
-              | grep -q .; then
+          if git ls-remote --exit-code --heads origin "${FEED_BRANCH}" >/dev/null 2>&1; then
+            git fetch origin "${FEED_BRANCH}:${FEED_BRANCH}"
+            git worktree add feed-publish "${FEED_BRANCH}"
+          else
+            git worktree add --detach feed-publish
+            git -C feed-publish switch --orphan "${FEED_BRANCH}"
+            git -C feed-publish rm -rf . >/dev/null 2>&1 || true
+          fi
 
-              echo "ERROR: Missing Alfis APK for ${ARCH}"
+          mkdir -p "feed-publish/${FEED_ROOT}"
+
+          mapfile -t ARCHS < <(jq -r '.arch[]' <<<"${ARCH_JSON}")
+
+          for ARCH in "${ARCHS[@]}"; do
+            SRC="artifacts/feed/${ARCH}"
+            if [ ! -f "${SRC}/packages.adb" ]; then
+              echo "ERROR: Missing feed for ${ARCH}"
               exit 1
+            fi
+
+            mkdir -p "feed-publish/${FEED_ROOT}/${ARCH}"
+            cp "${SRC}/packages.adb" "feed-publish/${FEED_ROOT}/${ARCH}/packages.adb"
+
+            if [ -f "${SRC}/alfis-feed.pub.pem" ]; then
+              cp "${SRC}/alfis-feed.pub.pem" "feed-publish/${FEED_ROOT}/${ARCH}/alfis-feed.pub.pem"
             fi
           done
 
-          if ! find release \
-            -type f \
-            -name 'luci-app-alfis-*.apk' \
-            | grep -q .; then
+          printf '%s\n' \
+            '# Alfis OpenWrt APK feed' \
+            '' \
+            "Latest Alfis release: ${TAG}" \
+            "OpenWrt release: ${OPENWRT_VERSION}" \
+            '' \
+            'Add the architecture-specific feed matching your device:' \
+            '' \
+            > feed-publish/README.md
 
-            echo "ERROR: Missing luci-app-alfis APK"
-            exit 1
+          for ARCH in "${ARCHS[@]}"; do
+            printf '%s\n' "https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/${FEED_ROOT}/${ARCH}" \
+              >> feed-publish/README.md
+          done
+
+          touch feed-publish/.nojekyll
+
+          git -C feed-publish add .
+          if git -C feed-publish diff --cached --quiet; then
+            echo "Feed is already up to date."
+          else
+            git -C feed-publish commit -m "Update Alfis ${TAG} feeds"
+            git -C feed-publish push origin "${FEED_BRANCH}"
           fi
-
-          echo
-          echo "All expected APKs are present."
-
-
-      # ----------------------------------------------------------
-      # Upload APKs to Release
-      # ----------------------------------------------------------
-
-      - name: Upload APKs to Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.release_tag.outputs.tag }}
-          files: |
-            release/*.apk
-          fail_on_unmatched_files: true
-          overwrite_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

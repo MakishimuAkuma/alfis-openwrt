@@ -105,6 +105,15 @@ endef
 
 
 define Package/alfis/install
+	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
+	$(INSTALL_DATA) ./root/usr/share/luci/menu.d/luci-app-alfis.json $(1)/usr/share/luci/menu.d/
+
+	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
+	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/luci-app-alfis.json $(1)/usr/share/rpcd/acl.d/
+
+	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/alfis
+	$(INSTALL_DATA) ./root/www/luci-static/resources/view/alfis/*.js $(1)/www/luci-static/resources/view/alfis/
+
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/bin/alfis $(1)/usr/bin/alfis
 
