@@ -102,7 +102,7 @@ jobs:
           echo "No new stable Alfis release. Nothing to build."
 
   discover:
-    name: Discover OpenWrt ${{ env.OPENWRT_VERSION }} architectures
+    name: Discover OpenWrt 25.12.5 architectures
     needs: check
     if: needs.check.outputs.build == 'true'
     runs-on: [self-hosted, Linux, X64]
