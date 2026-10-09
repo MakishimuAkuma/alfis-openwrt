@@ -324,7 +324,7 @@ jobs:
 
       - name: Upload Alfis artifact
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: alfis-${{ matrix.arch }}
           path: artifacts/
@@ -333,7 +333,7 @@ jobs:
 
       - name: Upload build log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: build-log-alfis-${{ matrix.arch }}
           path: logs/
