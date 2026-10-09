@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout package feed
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -85,7 +85,7 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-                    if [ "$CURRENT" = "$VERSION" ]; then
+          if [ "$CURRENT" = "$VERSION" ]; then
             echo "Alfis upstream version matches package version: $VERSION"
 
             RELEASE_API="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}"
@@ -203,7 +203,7 @@ jobs:
 
     steps:
       - name: Checkout package feed
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -267,6 +267,25 @@ jobs:
           BUILD_LOG: 1
           V: s
 
+      - name: Export public APK feed key
+        shell: bash
+        env:
+          APK_SIGNING_KEY: ${{ secrets.APK_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+
+          PUB="artifacts/feed/${{ matrix.arch }}/alfis-feed.pub.pem"
+          mkdir -p "$(dirname "$PUB")"
+
+          if [ -z "${APK_SIGNING_KEY:-}" ]; then
+            echo "ERROR: APK_SIGNING_KEY secret is empty or unavailable"
+            exit 1
+          fi
+
+          printf '%s' "$APK_SIGNING_KEY" | openssl pkey -pubout -out "$PUB"
+          chmod 644 "$PUB"
+          echo "Exported public APK feed key: $PUB"
+
       - name: Collect Alfis artifacts
         if: success()
         shell: bash
@@ -284,21 +303,20 @@ jobs:
 
           cp "$APK" "artifacts/release/alfis-${{ matrix.arch }}.apk"
 
-          FEED="$(find . -type f -name packages.adb | head -n1)"
-          PUB="$(find . -type f -name '*.pub.pem' | head -n1 || true)"
+          FEED="$(find . -type f -name packages.adb -print -quit)"
+          PUB="artifacts/feed/${{ matrix.arch }}/alfis-feed.pub.pem"
 
           if [ -z "$FEED" ]; then
             echo "ERROR: packages.adb not found"
             exit 1
           fi
 
-          if [ -z "$PUB" ]; then
-            echo "ERROR: public APK feed key (*.pub.pem) not found"
+          if [ ! -s "$PUB" ]; then
+            echo "ERROR: public APK feed key was not generated: $PUB"
             exit 1
           fi
 
           cp "$FEED" "artifacts/feed/${{ matrix.arch }}/packages.adb"
-          cp "$PUB" "artifacts/feed/${{ matrix.arch }}/alfis-feed.pub.pem"
 
           echo "Artifacts for ${{ matrix.arch }}:"
           find "artifacts/feed/${{ matrix.arch }}" -type f -print
@@ -333,7 +351,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
