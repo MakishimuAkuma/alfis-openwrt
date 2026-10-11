@@ -3,13 +3,13 @@
 ### Install trust key once
 
 ```sh
-wget -qO "/etc/apk/keys/alfis-feed.pem" "https://raw.githubusercontent.com/MakishimuAkuma/alfis-openwrt/gh-pages/25.12/$(apk info --print-arch)/alfis-feed.pub.pem"
+wget -qO "/etc/apk/keys/alfis-feed.pem" "https://raw.githubusercontent.com/MakishimuAkuma/alfis-openwrt/gh-pages/25.12/$(cat /etc/apk/arch)/alfis-feed.pub.pem"
 ```
 
 ### Add repository
 
 ```sh
-echo "https://raw.githubusercontent.com/MakishimuAkuma/alfis-openwrt/gh-pages/25.12/$(apk info --print-arch)/packages.adb" > "/etc/apk/repositories.d/alfis.list"
+echo "https://raw.githubusercontent.com/MakishimuAkuma/alfis-openwrt/gh-pages/25.12/$(cat /etc/apk/arch)/packages.adb" > "/etc/apk/repositories.d/alfis.list"
 apk update
 apk add alfis
 ```
