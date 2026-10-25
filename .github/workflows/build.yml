@@ -21,6 +21,7 @@ jobs:
       build: ${{ steps.check.outputs.build }}
       tag: ${{ steps.check.outputs.tag }}
       version: ${{ steps.check.outputs.version }}
+      hash: ${{ steps.check.outputs.hash }}
 
     steps:
       - name: Checkout package feed
@@ -44,83 +45,142 @@ jobs:
         id: check
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          API="https://api.github.com/repos/Revertron/Alfis/releases/latest"
+          UPSTREAM_API="https://api.github.com/repos/Revertron/Alfis/releases/latest"
+          RELEASE_JSON="$(curl -fsSL --retry 5 --retry-delay 2 \\
+            -H 'Accept: application/vnd.github+json' \\
+            -H "Authorization: Bearer ${GH_TOKEN}" \\
+            -H 'X-GitHub-Api-Version: 2022-11-28' \\
+            "$UPSTREAM_API")"
 
-          RELEASE_JSON="$(curl -fsSL \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2026-03-10' \
-            ${GITHUB_TOKEN:+-H "Authorization: Bearer ${GITHUB_TOKEN}"} \
-            "$API")"
-
-          TAG="$(jq -r '.tag_name' <<<"$RELEASE_JSON")"
-          PRERELEASE="$(jq -r '.prerelease' <<<"$RELEASE_JSON")"
-          DRAFT="$(jq -r '.draft' <<<"$RELEASE_JSON")"
-
-          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
-            echo "ERROR: Could not determine latest Alfis release"
-            exit 1
-          fi
-
-          if [ "$PRERELEASE" = "true" ] || [ "$DRAFT" = "true" ]; then
-            echo "ERROR: GitHub returned a prerelease/draft as latest release"
-            exit 1
-          fi
-
+          TAG="$(jq -r '.tag_name // ""' <<<"$RELEASE_JSON")"
           VERSION="${TAG#v}"
 
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            echo "ERROR: Could not determine latest Alfis stable release"
+            exit 1
+          fi
+
+          if ! [[ "$VERSION" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
             echo "ERROR: Unexpected Alfis release tag: $TAG"
             exit 1
           fi
 
           CURRENT="$(sed -n 's/^PKG_VERSION:=//p' alfis/Makefile | head -n1)"
+          CURRENT_TAG=""
+          RELEASE_API="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest"
+          RELEASE_TMP="$(mktemp)"
+          trap 'rm -f "$RELEASE_TMP"' EXIT
 
-          echo "Latest Alfis release: $TAG"
-          echo "Package version:       $CURRENT"
+          RELEASE_STATUS="$(curl -sS --retry 5 --retry-delay 2 -o "$RELEASE_TMP" -w '%{http_code}' \\
+            -H 'Accept: application/vnd.github+json' \\
+            -H "Authorization: Bearer ${GH_TOKEN}" \\
+            -H 'X-GitHub-Api-Version: 2022-11-28' \\
+            "$RELEASE_API")"
+
+          if [ "$RELEASE_STATUS" = "200" ]; then
+            CURRENT_TAG="$(jq -r '.tag_name // ""' "$RELEASE_TMP")"
+            CURRENT_TAG="${CURRENT_TAG#v}"
+          elif [ "$RELEASE_STATUS" = "404" ]; then
+            echo "No published Alfis package release found; this will be the initial release."
+          else
+            echo "ERROR: GitHub Releases API returned HTTP $RELEASE_STATUS"
+            cat "$RELEASE_TMP"
+            exit 1
+          fi
+
+          echo "Latest upstream Alfis tag: $TAG"
+          echo "Latest package release:    ${CURRENT_TAG:-<none>}"
+          echo "Package Makefile version:  ${CURRENT:-<empty>}"
 
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-          if [ "$CURRENT" = "$VERSION" ]; then
-            echo "Alfis upstream version matches package version: $VERSION"
+          BUILD=true
 
-            RELEASE_API="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}"
+          if [ -n "$CURRENT_TAG" ] && [ "$(printf '%s\\n' "$CURRENT_TAG" "$VERSION" | sort -V | tail -n1)" = "$CURRENT_TAG" ]; then
+            echo "Latest package release ($CURRENT_TAG) is equal to or newer than upstream ($VERSION)."
+            BUILD=false
+          fi
 
-            RELEASE_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' \
-              -H 'Accept: application/vnd.github+json' \
-              -H 'X-GitHub-Api-Version: 2026-03-10' \
-              ${GITHUB_TOKEN:+-H "Authorization: Bearer ${GITHUB_TOKEN}"} \
-              "$RELEASE_API")"
+          if [ -n "$CURRENT" ] && [[ "$CURRENT" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] &&
+             [ "$(printf '%s\\n' "$CURRENT" "$VERSION" | sort -V | tail -n1)" = "$CURRENT" ] &&
+             [ "$CURRENT" != "$VERSION" ]; then
+            echo "Makefile version ($CURRENT) is newer than upstream ($VERSION); refusing downgrade."
+            BUILD=false
+          fi
 
-            if [ "$RELEASE_STATUS" = "200" ]; then
-              echo "GitHub Release $TAG already exists."
-              echo "build=false" >> "$GITHUB_OUTPUT"
-            elif [ "$RELEASE_STATUS" = "404" ]; then
-              echo "GitHub Release $TAG does not exist."
-              echo "Rebuilding Alfis $TAG."
-              echo "build=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "ERROR: Unexpected GitHub Release API status: $RELEASE_STATUS"
-              exit 1
-            fi
-
-          elif [ "$(printf '%s\n' "$CURRENT" "$VERSION" | sort -V | tail -n1)" = "$CURRENT" ]; then
-            echo "Local package version $CURRENT is newer than upstream stable $VERSION."
-            echo "build=false" >> "$GITHUB_OUTPUT"
-
-          else
-            echo "New Alfis version detected: $CURRENT -> $VERSION"
+          if [ "$BUILD" = true ]; then
+            SOURCE_URL="https://github.com/Revertron/Alfis/archive/refs/tags/${TAG}.tar.gz"
+            TMP="$(mktemp)"
+            trap 'rm -f "$TMP" "$RELEASE_TMP"' EXIT
+            echo "Downloading Alfis source: $SOURCE_URL"
+            curl -fL --retry 5 --retry-delay 2 -o "$TMP" "$SOURCE_URL"
+            HASH="$(sha256sum "$TMP" | awk '{print $1}')"
+            echo "Source SHA256: $HASH"
+            echo "hash=$HASH" >> "$GITHUB_OUTPUT"
             echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Skip build when already current
         if: steps.check.outputs.build == 'false'
         run: |
           echo "No new stable Alfis release. Nothing to build."
+
+  update-makefile:
+    name: Update Alfis Makefile
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: [self-hosted, Linux, X64]
+
+    steps:
+      - name: Checkout package feed
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 1
+
+      - name: Update Alfis package version and source hash
+        shell: bash
+        env:
+          ALFIS_VERSION: ${{ needs.check.outputs.version }}
+          ALFIS_HASH: ${{ needs.check.outputs.hash }}
+        run: |
+          set -euo pipefail
+
+          test -n "$ALFIS_VERSION"
+          test -n "$ALFIS_HASH"
+
+          grep -q '^PKG_VERSION:=' alfis/Makefile
+          grep -q '^PKG_SOURCE:=' alfis/Makefile
+          grep -q '^PKG_SOURCE_SUBDIR:=' alfis/Makefile
+          grep -q '^PKG_BUILD_DIR:=' alfis/Makefile
+          grep -q '^PKG_HASH:=' alfis/Makefile
+
+          sed -i -E "s/^PKG_VERSION:=.*/PKG_VERSION:=${ALFIS_VERSION}/" alfis/Makefile
+          sed -i -E "s#^PKG_SOURCE:=.*#PKG_SOURCE:=v${ALFIS_VERSION}.tar.gz#" alfis/Makefile
+          sed -i -E "s#^PKG_SOURCE_SUBDIR:=.*#PKG_SOURCE_SUBDIR:=Alfis-${ALFIS_VERSION}#" alfis/Makefile
+          sed -i -E 's#^PKG_BUILD_DIR:=.*#PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_SOURCE_SUBDIR)#' alfis/Makefile
+          sed -i -E "s/^PKG_HASH:=.*/PKG_HASH:=${ALFIS_HASH}/" alfis/Makefile
+
+          git diff --check
+          git diff -- alfis/Makefile
+
+          if git diff --quiet -- alfis/Makefile; then
+            echo "Alfis Makefile already has the requested version and hash."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add alfis/Makefile
+          git commit -m "Update Alfis to ${ALFIS_VERSION}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
   discover:
     name: Discover OpenWrt 25.12.5 architectures
@@ -193,6 +253,7 @@ jobs:
     needs:
       - check
       - discover
+      - update-makefile
     if: needs.check.outputs.build == 'true'
     runs-on: [self-hosted, Linux, X64]
 
@@ -202,38 +263,11 @@ jobs:
         arch: ${{ fromJSON(needs.discover.outputs.matrix).arch }}
 
     steps:
-      - name: Checkout package feed
+      - name: Checkout updated package feed
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.ref_name }}
           fetch-depth: 1
-
-      - name: Prepare Alfis source version
-        shell: bash
-        env:
-          ALFIS_TAG: ${{ needs.check.outputs.tag }}
-          ALFIS_VERSION: ${{ needs.check.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          sed -i -E "s/^PKG_VERSION:=.*/PKG_VERSION:=${ALFIS_VERSION}/" alfis/Makefile
-          sed -i -E "s#^PKG_SOURCE:=.*#PKG_SOURCE:=v${ALFIS_VERSION}.tar.gz#" alfis/Makefile
-          sed -i -E "s#^PKG_SOURCE_SUBDIR:=.*#PKG_SOURCE_SUBDIR:=Alfis-${ALFIS_VERSION}#" alfis/Makefile
-          sed -i -E "s#^PKG_BUILD_DIR:=.*#PKG_BUILD_DIR:=\$(BUILD_DIR)/\$(PKG_SOURCE_SUBDIR)#" alfis/Makefile
-
-          URL="https://github.com/Revertron/Alfis/archive/refs/tags/${ALFIS_TAG}.tar.gz"
-          TMP="$(mktemp)"
-          trap 'rm -f "$TMP"' EXIT
-
-          echo "Downloading source: $URL"
-          curl -fL --retry 5 --retry-delay 2 -o "$TMP" "$URL"
-
-          HASH="$(sha256sum "$TMP" | awk '{print $1}')"
-          echo "Source SHA256: $HASH"
-
-          sed -i -E "s/^PKG_HASH:=.*/PKG_HASH:=${HASH}/" alfis/Makefile
-
-          echo
-          grep -E '^PKG_(NAME|VERSION|RELEASE|SOURCE|SOURCE_URL|SOURCE_SUBDIR|BUILD_DIR|HASH):' alfis/Makefile
 
       - name: Set build parallelism
         shell: bash
